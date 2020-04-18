@@ -9,6 +9,21 @@
 
 struct jpg_buf_t *jpg;
 
+static int Exitflag = 0;
+
+void sigHandler(int sigid)
+{
+	switch(sigid)
+	{
+		case SIGINT:
+			kill(0,SIGEXIT);
+			Exitflag = 1;
+			break;
+		default:
+			break;
+	}
+}
+
 int main()
 {
 	pid_t pid;
@@ -23,7 +38,7 @@ int main()
 	/* 创建摄像头处理进程 */
 	pid = fork();
 	if (pid == -1) {
-		perror("fork camera");
+		LOGE("fork camera");
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
 		camera_on();
@@ -34,7 +49,7 @@ int main()
 	/* 创建串口处理进程 */
 	pid = fork();
 	if (pid == -1) {
-		perror("fork GPIO");
+		LOGE("fork GPIO");
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
 		gpio_on();
@@ -44,16 +59,22 @@ int main()
 	/* 创建客户端处理进程 */
 	pid = fork();
 	if (pid == -1) {
-		perror("fork client");
+		LOGE("fork client");
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
 		client_on();
 		exit(EXIT_SUCCESS);
 	}
 
-	while(1) {
-		printf("main process ......\n");
-		sleep(10);
+	signal(SIGBGIN,SIG_IGN);
+	signal(SIGSUCC,SIG_IGN);
+	signal(SIGFAIL,SIG_IGN);
+	signal(SIGEROR,SIG_IGN);
+	signal(SIGEXIT,SIG_IGN);
+
+	while(!Exitflag) {
+		LOGD("main process ......\n");
+		pause();
 	}
 
 	return 0;

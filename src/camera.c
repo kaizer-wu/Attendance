@@ -9,6 +9,7 @@
 #include <linux/videodev2.h>
 #include "../include/cam.h"
 #include "../include/sig.h"
+#include "../include/convert.h"
 
 #define	REQBUFS_COUNT	4
 
@@ -26,7 +27,13 @@ static int Exitflag;
 static int Stopflag;
 
 
-int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsigned int *size);
+unsigned int width;
+unsigned int height;
+unsigned int size;
+
+
+int camera_init(unsigned int *width, unsigned int *height, unsigned int *size);
+int camera_open(int fd);
 int camera_start(int fd);
 int camera_dqbuf(int fd, void **buf, unsigned int *size, unsigned int *index);
 int camera_eqbuf(int fd, unsigned int index);
@@ -34,14 +41,122 @@ int camera_stop(int fd);
 int camera_exit(int fd);
 void camSigHandler(int sigid);
 
+int camera_open(int fd)
+{
+	int ret;
+	int i;
+	unsigned int index;
+	char *yuv;
+	char *rgb;
+
+	LOGD("test log 1\n");
+	
+	while(!Exitflag)
+	{
+		if(Stopflag)
+		{
+			jpg->jpg_size=0;
+			pause();
+			continue;
+		}
+	LOGD("test log 2\n");
+		/*摄像头开启*/
+		ret = camera_start(fd);
+		if (ret == -1)
+		{
+			return fd;
+		}
+	#ifndef VIDEO_FORMAT_MJPEG 
+		convert_rgb_to_jpg_init();
+		rgb = malloc(width*height*3);
+		if (rgb == NULL) {
+			LOGE("malloc");
+			return -1;
+		}
+	#endif
+		/*前几张图片可能有问题，需要采集几张图片丢弃，确保收到的是稳定后的图片*/
+		for (i = 0; i < 8; i++) {
+			ret = camera_dqbuf(fd, (void **)&yuv, &size, &index);
+			if (ret == -1)
+				exit(EXIT_FAILURE);
+
+			ret = camera_eqbuf(fd, index);
+			if (ret == -1)
+				exit(EXIT_FAILURE);
+		}
+
+		LOGD("init camera success\n");
+		
+		/* 循环采集图片 */
+		while (!Stopflag) {
+			/*从队列中取出图片缓冲*/
+			ret = camera_dqbuf(fd, (void **)&yuv, &size, &index);
+			if (ret == -1)
+			{
+				return ret;
+			}
+
+	#ifdef VIDEO_FORMAT_MJPEG
+				memcpy(jpg->jpg_buf, yuv, size);
+				jpg->jpg_size = size;
+	#else
+				convert_yuv_to_rgb(yuv, rgb, width, height, 24)	;
+				/* 将rgb转换为jpg */
+				jpg->jpg_size = convert_rgb_to_jpg_work(rgb, jpg->jpg_buf, width, height, 24, 80);
+	#endif
+
+			/*把缓冲重新入队*/
+			ret = camera_eqbuf(fd, index);
+			if (ret == -1)
+				return -1;
+			
+		}
+
+
+		ret = camera_stop(fd);
+		if (ret == -1)
+		{
+			return -1;
+		}
+	}
+	
+
+	ret = camera_exit(fd);
+	if (ret == -1)
+	{
+		return -1;
+	}
+	return 0;
+}
+
+
 void camSigHandler(int sigid)
 {
+	int ret;
+	int i;
+	static int fd = -1;
+
 	switch(sigid)
 	{
+		case -1:
+			/*设置分辨率*/
+			width = W;
+			height = H;
+			/*初始化摄像头*/
+			fd = camera_init(&width, &height, &size);
+			if (fd == -1)
+			{
+				//return fd;
+			}
+			LOGD("camera fd = %d\n",fd);
+			break;
 		case SIGBGIN:
 			Stopflag=0;
+			LOGD("===SIGBGIN===\n");
+			camera_open(fd);
 			break;
 		case SIGSUCC:
+			LOGD("===SIGSUCC===\n");
 			Stopflag=1;
 			break;
 		case SIGFAIL:
@@ -57,7 +172,7 @@ void camSigHandler(int sigid)
 	}
 }
 
-int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsigned int *size)
+int camera_init(unsigned int *width, unsigned int *height, unsigned int *size)
 {
 	int i;
 	int fd = -1;;
@@ -65,15 +180,14 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 	struct v4l2_buffer vbuf;
 	struct v4l2_format format;
 	struct v4l2_capability capability;
-	Exitflag = 0;
-	if((fd = open(devpath, O_RDWR)) == -1){
-        perror("camera_init open");
+	if((fd = open(CAMERA_USB, O_RDWR)) == -1){
+        LOGE("open()");
 		return -1;		
 	}
 	/*ioctl 查看支持的驱动*/
 	ret = ioctl(fd, VIDIOC_QUERYCAP, &capability);
 	if (ret == -1) {
-		perror("camera->init ");
+		LOGE("capability failed");
 		return -1;
 	}
 	/*判断设备是否支持视频采集*/
@@ -98,9 +212,11 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 	format.fmt.pix.field = V4L2_FIELD_ANY;
 	ret = ioctl(fd, VIDIOC_S_FMT, &format);
 	if(ret == -1)
-		perror("camera init  8888");
+	{
+		LOGE("picture set format");		
+	}
 	else {
-		fprintf(stdout, "camera->init: picture format is mjpeg\n");
+		LOGD("picture format is mjpeg\n");
 	}
 #else
 	/*设置捕获的视频格式YUYV*/
@@ -112,15 +228,17 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 	format.fmt.pix.field = V4L2_FIELD_ANY;
 	ret = ioctl(fd, VIDIOC_S_FMT, &format);
 	if(ret == -1)
-		perror("camera init  8888");
+	{
+		LOGE("picture set format");	
+	}
 	else {
-		fprintf(stdout, "camera->init: picture format is yuyv\n");
+		LOGD("picture format is yuyv\n");
 	}
 
 #endif
 	ret = ioctl(fd, VIDIOC_G_FMT, &format);
 	if (ret == -1) {
-		perror("camera init");
+		LOGE("camera get format");
 		return -1;
 	}
 	/*向驱动申请缓存*/
@@ -130,7 +248,7 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 	reqbufs.memory	= V4L2_MEMORY_MMAP;
 	ret = ioctl(fd, VIDIOC_REQBUFS, &reqbufs);			
 	if (ret == -1) {	
-		perror("camera init");
+		LOGE("camera init");
 		close(fd);
 		return -1;
 	}
@@ -143,7 +261,7 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 		vbuf.index = i;
 		ret = ioctl(fd, VIDIOC_QUERYBUF, &vbuf);
 		if (ret == -1) {
-			perror("camera init");
+			LOGE("camera init");
 			close(fd);
 			return -1;
 		}
@@ -152,7 +270,7 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 		bufs[i].start = mmap(NULL, vbuf.length, PROT_READ | PROT_WRITE, 
 		                     MAP_SHARED, fd, vbuf.m.offset);
 		if (bufs[i].start == MAP_FAILED) {
-			perror("camera init");
+			LOGE("camera init");
 			close(fd);
 			return -1;
 		}
@@ -161,7 +279,7 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 		vbuf.memory = V4L2_MEMORY_MMAP;
 		ret = ioctl(fd, VIDIOC_QBUF, &vbuf);
 		if (ret == -1) {
-			perror("camera init");
+			LOGE("camera init");
 			close(fd);
 			return -1;
 		}
@@ -171,11 +289,6 @@ int camera_init(char *devpath, unsigned int *width, unsigned int *height, unsign
 	*height = format.fmt.pix.height;
 	*size = bufs[0].length;
 
-	signal(SIGBGIN,camSigHandler);
-	signal(SIGSUCC,camSigHandler);
-	signal(SIGFAIL,camSigHandler);
-	signal(SIGEROR,camSigHandler);
-	signal(SIGEXIT,camSigHandler);
 
 	return fd;
 }
@@ -189,10 +302,10 @@ int camera_start(int fd)
 	/*ioctl控制摄像头开始采集*/
 	ret = ioctl(fd, VIDIOC_STREAMON, &type);
 	if (ret == -1) {
-		perror("camera->start");
+		LOGE("camera->start");
 		return -1;
 	}
-	fprintf(stdout, "camera->start: start capture\n");
+	LOGD("start capture\n");
 
 	return 0;
 }
@@ -211,7 +324,7 @@ int camera_dqbuf(int fd, void **buf, unsigned int *size, unsigned int *index)
 		timeout.tv_usec = 0;
 		ret = select(fd + 1, &fds, NULL, NULL, &timeout);
 		if (ret == -1) {
-			perror("camera->dbytesusedqbuf");
+			LOGE("camera->dbytesusedqbuf");
 			if (errno == EINTR)
 				continue;
 			else
@@ -224,7 +337,7 @@ int camera_dqbuf(int fd, void **buf, unsigned int *size, unsigned int *index)
 			vbuf.memory = V4L2_MEMORY_MMAP;
 			ret = ioctl(fd, VIDIOC_DQBUF, &vbuf);
 			if (ret == -1) {
-				perror("camera->dqbuf");
+				LOGE("camera->dqbuf");
 				return -1;
 			}
 			*buf = bufs[vbuf.index].start;
@@ -246,7 +359,7 @@ int camera_eqbuf(int fd, unsigned int index)
 	vbuf.index = index;
 	ret = ioctl(fd, VIDIOC_QBUF, &vbuf);
 	if (ret == -1) {
-		perror("camera->eqbuf");
+		LOGE("camera->eqbuf");
 		return -1;
 	}
 
@@ -260,10 +373,10 @@ int camera_stop(int fd)
 
 	ret = ioctl(fd, VIDIOC_STREAMOFF, &type);
 	if (ret == -1) {
-		perror("camera->stop");
+		LOGE("camera->stop");
 		return -1;
 	}
-	fprintf(stdout, "camera->stop: stop capture\n");
+	LOGD("stop capture\n");
 
 	return 0;
 }
@@ -282,107 +395,25 @@ int camera_exit(int fd)
 	}
 	for (i = 0; i < reqbufs.count; i++)
 		munmap(bufs[i].start, bufs[i].length);
-	fprintf(stdout, "camera->exit: camera exit\n");
+	LOGD("camera exit\n");
 	return close(fd);
 }
 
 int camera_on(void)
 {
-	int ret;
-	int i;
-	int fd;
-	unsigned int width;
-	unsigned int height;
-	unsigned int size;
-	unsigned int index;
-	char *yuv;
-	char *rgb;
 
-	/*设置分辨率*/
-	width = W;
-	height = H;
-	
-	/*初始化摄像头*/
-	fd = camera_init(CAMERA_USB, &width, &height, &size);
-	if (fd == -1)
-	{
-		return fd;
-	}
-	
+	signal(SIGBGIN,camSigHandler);
+	signal(SIGSUCC,camSigHandler);
+	signal(SIGFAIL,camSigHandler);
+	signal(SIGEROR,camSigHandler);
+	signal(SIGEXIT,camSigHandler);
+	Exitflag = 0;
+	camSigHandler(-1);
+
 	while(!Exitflag)
 	{
-		if(Stopflag)
-		{
-			jpg->jpg_size=0;
-			sleep(1);
-			continue;
-		}
-		/*摄像头开启*/
-		ret = camera_start(fd);
-		if (ret == -1)
-		{
-			return fd;
-		}
-	#ifndef VIDEO_FORMAT_MJPEG 
-		convert_rgb_to_jpg_init();
-		rgb = malloc(width*height*3);
-		if (rgb == NULL) {
-			perror("malloc");
-			return -1;
-		}
-	#endif
-		/*前几张图片可能有问题，需要采集几张图片丢弃，确保收到的是稳定后的图片*/
-		for (i = 0; i < 8; i++) {
-			ret = camera_dqbuf(fd, (void **)&yuv, &size, &index);
-			if (ret == -1)
-				exit(EXIT_FAILURE);
-
-			ret = camera_eqbuf(fd, index);
-			if (ret == -1)
-				exit(EXIT_FAILURE);
-		}
-
-		fprintf(stdout, "init camera success\n");
-		
-		/* 循环采集图片 */
-		while (!Stopflag) {
-			/*从队列中取出图片缓冲*/
-			ret = camera_dqbuf(fd, (void **)&yuv, &size, &index);
-			if (ret == -1)
-			{
-				return ret;
-			}
-
-	#ifdef VIDEO_FORMAT_MJPEG
-				memcpy(jpg->jpg_buf, yuv, size);
-				jpg->jpg_size = size;
-	#else
-				convert_yuv_to_rgb(yuv, rgb, width, height, 24)	;
-				/* 将rgb转换为jpg */
-				jpg->jpg_size = convert_rgb_to_jpg_work(rgb, jpg->jpg_buf, width, height, 24, 80);
-			}
-	#endif
-
-			/*把缓冲重新入队*/
-			ret = camera_eqbuf(fd, index);
-			if (ret == -1)
-				return -1;
-			
-		}
-
-
-		ret = camera_stop(fd);
-		if (ret == -1)
-		{
-			return -1;
-		}
-	}
-	
-
-	ret = camera_exit(fd);
-	if (ret == -1)
-	{
-		return -1;
+		LOGD("camera process .....\n");
+		pause();
 	}
 	return 0;
 }

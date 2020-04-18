@@ -7,8 +7,10 @@
 #define CAMERA_USB "/dev/video0"
 #define W 640
 #define H 480
+#define IP "192.168.0.104"
+#define PORT 8888
 
-#define VIDEO_FORMAT_MJPEG
+//#define VIDEO_FORMAT_MJPEG
 
 struct jpg_buf_t {
 	char jpg_buf[JPG_MAX_SIZE];

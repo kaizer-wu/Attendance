@@ -48,7 +48,7 @@ int lightCtrl(int light_type)
 	{
 		if (pthread_create(&lightThread,NULL,lightCtrlThread,NULL) !=0 )
 		{
-			printf("pthread_create fail!\n");
+			LOGE("pthread_create");
 			return -1;
 		}
 	}
