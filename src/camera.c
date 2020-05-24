@@ -51,15 +51,8 @@ int camera_open(int fd)
 
 	LOGD("test log 1\n");
 	
-	while(!Exitflag)
+	while(!Stopflag)
 	{
-		if(Stopflag)
-		{
-			jpg->jpg_size=0;
-			pause();
-			continue;
-		}
-	LOGD("test log 2\n");
 		/*摄像头开启*/
 		ret = camera_start(fd);
 		if (ret == -1)
@@ -74,6 +67,7 @@ int camera_open(int fd)
 			return -1;
 		}
 	#endif
+			LOGD("camera started\n");
 		/*前几张图片可能有问题，需要采集几张图片丢弃，确保收到的是稳定后的图片*/
 		for (i = 0; i < 8; i++) {
 			ret = camera_dqbuf(fd, (void **)&yuv, &size, &index);
@@ -104,6 +98,7 @@ int camera_open(int fd)
 				/* 将rgb转换为jpg */
 				jpg->jpg_size = convert_rgb_to_jpg_work(rgb, jpg->jpg_buf, width, height, 24, 80);
 	#endif
+			LOGD("get image\n");
 
 			/*把缓冲重新入队*/
 			ret = camera_eqbuf(fd, index);
@@ -111,6 +106,7 @@ int camera_open(int fd)
 				return -1;
 			
 		}
+		jpg->jpg_size=0;
 
 
 		ret = camera_stop(fd);
@@ -119,26 +115,26 @@ int camera_open(int fd)
 			return -1;
 		}
 	}
-	
-
 	ret = camera_exit(fd);
 	if (ret == -1)
 	{
 		return -1;
 	}
+	
+
 	return 0;
 }
 
 
 void camSigHandler(int sigid)
 {
-	int ret;
-	int i;
 	static int fd = -1;
 
 	switch(sigid)
 	{
-		case -1:
+		case SIGBGIN:
+			Stopflag=0;
+			LOGD("===SIGBGIN===\n");
 			/*设置分辨率*/
 			width = W;
 			height = H;
@@ -149,23 +145,23 @@ void camSigHandler(int sigid)
 				//return fd;
 			}
 			LOGD("camera fd = %d\n",fd);
-			break;
-		case SIGBGIN:
-			Stopflag=0;
-			LOGD("===SIGBGIN===\n");
 			camera_open(fd);
+			
 			break;
 		case SIGSUCC:
 			LOGD("===SIGSUCC===\n");
 			Stopflag=1;
 			break;
 		case SIGFAIL:
+			LOGD("===SIGFAIL===\n");
 			Stopflag=1;
 			break;
 		case SIGEROR:
+			LOGD("===SIGEROR===\n");
 			Stopflag=1;
 			break;
 		case SIGEXIT:
+			LOGD("===SIGEXIT===\n");
 			Stopflag=1;
 			Exitflag=1;
 			break;
@@ -180,7 +176,7 @@ int camera_init(unsigned int *width, unsigned int *height, unsigned int *size)
 	struct v4l2_buffer vbuf;
 	struct v4l2_format format;
 	struct v4l2_capability capability;
-	if((fd = open(CAMERA_USB, O_RDWR)) == -1){
+	if((fd = open(CAMERA_USB, O_RDWR|O_NONBLOCK, 0)) == -1){
         LOGE("open()");
 		return -1;		
 	}
@@ -317,12 +313,15 @@ int camera_dqbuf(int fd, void **buf, unsigned int *size, unsigned int *index)
 	struct timeval timeout;
 	struct v4l2_buffer vbuf;
 
+	LOGD("dqbuf start\n");
+
 	while (1) {
 		FD_ZERO(&fds);
 		FD_SET(fd, &fds);
 		timeout.tv_sec = 2;
 		timeout.tv_usec = 0;
 		ret = select(fd + 1, &fds, NULL, NULL, &timeout);
+	LOGD("select end\n");
 		if (ret == -1) {
 			LOGE("camera->dbytesusedqbuf");
 			if (errno == EINTR)
@@ -335,6 +334,7 @@ int camera_dqbuf(int fd, void **buf, unsigned int *size, unsigned int *index)
 		} else {
 			vbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 			vbuf.memory = V4L2_MEMORY_MMAP;
+			LOGD("ioctrl start\n");
 			ret = ioctl(fd, VIDIOC_DQBUF, &vbuf);
 			if (ret == -1) {
 				LOGE("camera->dqbuf");
@@ -343,6 +343,7 @@ int camera_dqbuf(int fd, void **buf, unsigned int *size, unsigned int *index)
 			*buf = bufs[vbuf.index].start;
 			*size = vbuf.bytesused;
 			*index = vbuf.index;
+	LOGD("dqbuf end\n");
 
 			return 0;
 		}
@@ -354,6 +355,7 @@ int camera_eqbuf(int fd, unsigned int index)
 	int ret;
 	struct v4l2_buffer vbuf;
 
+	LOGD("eqbuf start\n");
 	vbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	vbuf.memory = V4L2_MEMORY_MMAP;
 	vbuf.index = index;
@@ -362,6 +364,7 @@ int camera_eqbuf(int fd, unsigned int index)
 		LOGE("camera->eqbuf");
 		return -1;
 	}
+	LOGD("eqbuf end\n");
 
 	return 0;
 }
@@ -408,12 +411,12 @@ int camera_on(void)
 	signal(SIGEROR,camSigHandler);
 	signal(SIGEXIT,camSigHandler);
 	Exitflag = 0;
-	camSigHandler(-1);
 
 	while(!Exitflag)
 	{
 		LOGD("camera process .....\n");
 		pause();
 	}
+	LOGD("camera quit\n");
 	return 0;
 }

@@ -11,6 +11,8 @@ struct jpg_buf_t *jpg;
 
 static int Exitflag = 0;
 
+int msgid;
+
 void sigHandler(int sigid)
 {
 	switch(sigid)
@@ -27,13 +29,11 @@ void sigHandler(int sigid)
 int main()
 {
 	pid_t pid;
-	int shmid;
-	int msgid;
 
 	/* 共享内存的初始化 */
-	shmid = shm_init(sizeof(struct jpg_buf_t), (void **)&jpg);
+	shm_init(sizeof(struct jpg_buf_t), (void **)&jpg);
 	jpg->jpg_size=0;
-	//msgid = msg_init();
+	msgid = msg_init();
 
 	/* 创建摄像头处理进程 */
 	pid = fork();
@@ -71,11 +71,13 @@ int main()
 	signal(SIGFAIL,SIG_IGN);
 	signal(SIGEROR,SIG_IGN);
 	signal(SIGEXIT,SIG_IGN);
+	signal(SIGINT,sigHandler);
 
 	while(!Exitflag) {
 		LOGD("main process ......\n");
 		pause();
 	}
+	LOGD("main quit\n");
 
 	return 0;
 }

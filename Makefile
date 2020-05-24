@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-c -g -I./include
+CFLAGS=-c -g -I./include -Wall
 LDFLAGS=-I./include -lpthread -lwiringPi -ljpeg
 VPATH=src:include
 

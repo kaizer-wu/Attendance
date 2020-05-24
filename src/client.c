@@ -16,7 +16,7 @@
 #include "../include/sig.h"
 
 extern struct jpg_buf_t *jpg;
-extern int srlfd;
+extern int msgid;
 
 int Exitflag;
 int Stopflag;
@@ -35,18 +35,19 @@ int client_init()
 	}
 	LOGD("sockfd=%d\n",sockfd);
 
-	memset(&s_addr,0,sizeof(s_addr));//内存清零函数
+	bzero(&s_addr,sizeof(s_addr));//内存清零函数
 	s_addr.sin_family = AF_INET;//地址族：ipv4
 	s_addr.sin_port = htons(PORT);//端口号由主机字节序转网络字节序
 	s_addr.sin_addr.s_addr = inet_addr(IP);//点分式转二进制网络字节序
 	socklen_t s_len = sizeof(s_addr);
 
 
-	//将服务器的ip和port与sockfd绑定
+	//链接服务器
 	ret = connect(sockfd, (struct sockaddr *)&s_addr,s_len);
 	if(-1 == ret)
 	{
 		LOGE("connect");
+		LOGD("client quit\n");
 		close(sockfd);
 		return -1;
 	}
@@ -56,28 +57,6 @@ int client_init()
 	return sockfd;
 }
 
-#if 0
-int server_wait_client_connect(int listenfd)
-{
-	int connfd;
-	struct sockaddr_in clt_addr;
-	socklen_t addrlen;
-
-	/* 等待客户端的连接请求，并建立连接 */
-	addrlen = sizeof(clt_addr);
-	connfd = accept(listenfd, (struct sockaddr *)&clt_addr, &addrlen);
-	if (connfd == -1) {
-		LOGE("connfd");
-		return -1;
-	}
-
-	LOGD("connfd = %d accept success\n", connfd);
-	LOGD("IP : %s\n", inet_ntoa(clt_addr.sin_addr));
-	LOGD("PORT : %d\n", ntohs(clt_addr.sin_port));
-
-	return connfd;
-}
-#endif
 
 int sendPic(int connfd)
 {
@@ -121,23 +100,26 @@ int sendPic(int connfd)
 void* clientRecvThread(void *arg)
 {
 	int connfd;
-	int count;
 	int ret;
-	static int i = 1;
-	char recvbuf[1] = {0};
+	struct rcv_buf_t recvbuf;
 	
 	connfd = (int)arg;
 
 	while(!Stopflag)
 	{
-		bzero(recvbuf,sizeof(recvbuf));
-		ret = read(connfd,recvbuf,sizeof(recvbuf));
+		bzero(&recvbuf,sizeof(recvbuf));
+		ret = read(connfd,&recvbuf,sizeof(recvbuf));
 		if(ret == -1 && Stopflag == 1)
 		{
 			pthread_exit(NULL);
 		}
 		else if(ret == -1){
 			LOGE("read()");
+			LOGD("SIGEROR\n");
+			recvbuf.type=2;
+			strcpy(recvbuf.rcv_buf,"read error\n");
+			msgsnd(msgid,&recvbuf,RBUFSIZE,0);
+			kill(0,SIGEROR);
 			pthread_exit(NULL);
 			Stopflag = 1;
 		}
@@ -149,18 +131,28 @@ void* clientRecvThread(void *arg)
 		}
 		else
 		{
-			switch(recvbuf[0])
+			switch(recvbuf.type)
 			{
-				case 'S':
+				case 1:
+					LOGD("SIGSUCC\n");
+					msgsnd(msgid,&recvbuf,RBUFSIZE,0);
 					kill(0,SIGSUCC);
 					break;
-				case 'F':
+				case 2:
+					LOGD("SIGFAIL\n");
+					msgsnd(msgid,&recvbuf,RBUFSIZE,0);
 					kill(0,SIGFAIL);
 					break;
-				case 'E':
+				case 3:
+					LOGD("SIGEROR\n");
+					LOGD("%s\n",recvbuf.rcv_buf);
+					msgsnd(msgid,&recvbuf,RBUFSIZE,0);
 					kill(0,SIGEROR);
 					break;
 				default: 
+					LOGD("error recv type\n");
+					msgsnd(msgid,&recvbuf,RBUFSIZE,0);
+					kill(0,SIGEROR);
 					break;
 			}
 			pthread_exit(NULL);
@@ -175,8 +167,16 @@ void clientSigHandler(int sigid)
 	static int connfd;
 	static pthread_t pthread = 0;
 	int ret;
+	struct rcv_buf_t recvbuf;
+	bzero(&recvbuf,sizeof(recvbuf));
 	switch(sigid)
 	{
+		case SIGALRM:
+			LOGD("connect timeout\n");
+			recvbuf.type=3;
+			strcpy(recvbuf.rcv_buf,"connect timeout!");
+			msgsnd(msgid,&recvbuf,RBUFSIZE,0);
+			kill(0,SIGEROR);
 		case SIGBGIN:
 			if(Stopflag == 0) break;
 			Stopflag = 0;
@@ -192,6 +192,15 @@ void clientSigHandler(int sigid)
 					}
 				}
 				sendPic(connfd);
+				alarm(10);
+			}
+			else
+			{
+				LOGE("connect server");
+				recvbuf.type=3;
+				strcpy(recvbuf.rcv_buf,"connect server error!");
+				msgsnd(msgid,&recvbuf,RBUFSIZE,0);
+				kill(0,SIGEROR);
 			}
 			break;
 		case SIGSUCC:
@@ -210,15 +219,14 @@ void clientSigHandler(int sigid)
 	}
 	close(connfd);
 	pthread_join(pthread,NULL);
+	pthread = 0;
 	LOGD("pthread exit\n");
 }
 
 int client_on()
 {
-	int connfd;
-	pthread_t pid;
-	int ret;
 
+	signal(SIGALRM,clientSigHandler);
 	signal(SIGBGIN,clientSigHandler);
 	signal(SIGSUCC,clientSigHandler);
 	signal(SIGFAIL,clientSigHandler);
@@ -231,5 +239,6 @@ int client_on()
 		LOGD("client process..\n");
 		pause();
 	}
+	LOGD("client quit\n");
 	return 0;
 }

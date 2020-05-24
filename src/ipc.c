@@ -67,7 +67,7 @@ int msg_init()
 		return -1;
 	}
 
-	msgid = msgget(key,IPC_CREAT|06660);
+	msgid = msgget(key,IPC_CREAT|0666);
 	if(msgid == -1){
 		LOGE("msgget");
 		return -1;
